@@ -29,17 +29,61 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      # Restores the debug keystore from the KEYSTORE secret so that every build is
+      # signed with the same key and can be installed over the previous one.
+      # On the first run (secret not set yet) a keystore is generated and uploaded
+      # as the `debug-keystore-base64` artifact, to be saved as the KEYSTORE secret.
+      - name: Restore or create signing keystore
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE }}
+        run: |
+          mkdir -p ~/.android
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "Restored keystore from the KEYSTORE secret"
+            echo "generated=false" >> $GITHUB_OUTPUT
+          else
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -storepass android -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            base64 -w 0 ~/.android/debug.keystore > keystore.b64
+            echo "generated=true" >> $GITHUB_OUTPUT
+            echo "::notice::KEYSTORE secret is not set. Save the debug-keystore-base64 artifact as the KEYSTORE secret to get a stable signature."
+          fi
+
+      - name: Upload generated keystore
+        if: ${{ steps.keystore.outputs.generated == 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: debug-keystore-base64
+          path: keystore.b64
+          if-no-files-found: error
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
 
-      - name: Build debug APK
+      - name: Build release APK
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
-          ./gradlew :manager:assembleDebug --stacktrace
+          ./gradlew :manager:assembleRelease --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: shizuku-debug
-          path: manager/build/outputs/apk/debug/*.apk
+          name: shizuku-release
+          path: manager/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # R8 renames classes, so this mapping file is required to symbolicate
+      # crash reports from the release build.
+      - name: Upload mapping
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: mapping
+          path: manager/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: ignore

@@ -56,6 +56,7 @@ import rikka.parcelablelist.ParcelableListSlice;
 import rikka.rish.RishConfig;
 import rikka.shizuku.ShizukuApiConstants;
 import rikka.shizuku.server.api.IContentProviderUtils;
+import rikka.shizuku.server.ktx.HandlerKt;
 import rikka.shizuku.server.util.HandlerUtil;
 import rikka.shizuku.server.util.InstalledPackagesCompat;
 import rikka.shizuku.server.util.UserHandleCompat;
@@ -346,22 +347,12 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
         if (!onetime) {
             configManager.update(requestUid, packages, ConfigManager.MASK_PERMISSION, allowed ? ConfigManager.FLAG_ALLOWED : ConfigManager.FLAG_DENIED);
 
-            int userId = UserHandleCompat.getUserId(requestUid);
-
-            for (String packageName : PackageManagerApis.getPackagesForUidNoThrow(requestUid)) {
-                PackageInfo pi = Android17Compat.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS, userId);
-                if (pi == null || pi.requestedPermissions == null || !ArraysKt.contains(pi.requestedPermissions, PERMISSION)) {
-                    continue;
-                }
-
-                // Keep the system runtime permission in sync with the config, otherwise a denied
-                // app would still look granted in the system settings and in checkPermission().
-                if (allowed) {
-                    Android17Compat.grantRuntimePermission(packageName, PERMISSION, userId);
-                } else {
-                    Android17Compat.revokeRuntimePermission(packageName, PERMISSION, userId);
-                }
-            }
+            // applyFlagsForUid() force-stops the package and revokes the runtime permission, both of
+            // which can terminate the client process. dispatchRequestPermissionResult() above is
+            // oneway, so give the reply a chance to be delivered before doing that.
+            HandlerKt.getWorkerHandler().postDelayed(() -> applyFlagsForUid(requestUid,
+                    ConfigManager.MASK_PERMISSION,
+                    allowed ? ConfigManager.FLAG_ALLOWED : ConfigManager.FLAG_DENIED), 500);
         }
     }
 
@@ -407,11 +398,14 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
             return;
         }
 
+        applyFlagsForUid(uid, mask, value);
+    }
+
+    private void applyFlagsForUid(int uid, int mask, int value) {
         int userId = UserHandleCompat.getUserId(uid);
 
         if ((mask & ConfigManager.MASK_PERMISSION) != 0) {
             boolean allowed = (value & ConfigManager.FLAG_ALLOWED) != 0;
-            boolean denied = (value & ConfigManager.FLAG_DENIED) != 0;
 
             List<ClientRecord> records = clientManager.findClients(uid);
             for (ClientRecord record : records) {
@@ -430,14 +424,16 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
                     continue;
                 }
 
-                int deviceId = 0;//Context.DEVICE_ID_DEFAULT
-                if (allowed) {
-                    Android17Compat.grantRuntimePermission(packageName, PERMISSION, userId);
-                } else {
-                    Android17Compat.revokeRuntimePermission(packageName, PERMISSION, userId);
+                // One failing package must not prevent the remaining ones from being updated.
+                try {
+                    if (allowed) {
+                        Android17Compat.grantRuntimePermission(packageName, PERMISSION, userId);
+                    } else {
+                        Android17Compat.revokeRuntimePermission(packageName, PERMISSION, userId);
+                    }
+                } catch (RemoteException e) {
+                    LOGGER.w(e, "updateFlagsForUid: " + packageName);
                 }
-
-                // TODO kill user service using
             }
         }
 
