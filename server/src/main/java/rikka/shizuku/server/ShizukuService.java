@@ -345,9 +345,7 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
 
         if (!onetime) {
             configManager.update(requestUid, packages, ConfigManager.MASK_PERMISSION, allowed ? ConfigManager.FLAG_ALLOWED : ConfigManager.FLAG_DENIED);
-        }
 
-        if (!onetime && allowed) {
             int userId = UserHandleCompat.getUserId(requestUid);
 
             for (String packageName : PackageManagerApis.getPackagesForUidNoThrow(requestUid)) {
@@ -356,7 +354,8 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
                     continue;
                 }
 
-                int deviceId = 0;//Context.DEVICE_ID_DEFAULT
+                // Keep the system runtime permission in sync with the config, otherwise a denied
+                // app would still look granted in the system settings and in checkPermission().
                 if (allowed) {
                     Android17Compat.grantRuntimePermission(packageName, PERMISSION, userId);
                 } else {

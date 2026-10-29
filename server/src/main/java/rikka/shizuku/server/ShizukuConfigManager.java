@@ -159,6 +159,14 @@ public class ShizukuConfigManager extends ConfigManager {
                 }
 
                 int uid = pi.applicationInfo.uid;
+
+                // Never let the system runtime permission state overwrite an explicit denial,
+                // otherwise FLAG_DENIED would be reset on every server restart.
+                ShizukuConfig.PackageEntry existing = findLocked(uid);
+                if (existing != null && existing.isDenied()) {
+                    continue;
+                }
+
                 boolean allowed;
                 try {
                     allowed = Android17Compat.checkPermission(PERMISSION, uid) == PackageManager.PERMISSION_GRANTED;

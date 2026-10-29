@@ -270,6 +270,7 @@
     <string name="permission_warning_template"><![CDATA[Allow <b>%1$s</b> to %2$s?]]></string>
     <string name="grant_dialog_button_allow_always">Allow all the time</string>
     <string name="grant_dialog_button_deny">"Deny"</string>
+    <string name="grant_dialog_button_deny_always">"Deny and don\'t ask again"</string>
 
     <!-- Starter -->
     <string name="starter">Starter</string>

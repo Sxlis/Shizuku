@@ -205,6 +205,7 @@
     <string name="permission_warning_template"><![CDATA[要允许<b>%1$s</b>%2$s吗？]]></string>
     <string name="grant_dialog_button_allow_always">始终允许</string>
     <string name="grant_dialog_button_deny">"拒绝"</string>
+    <string name="grant_dialog_button_deny_always">"拒绝且不再询问"</string>
     <!-- Starter -->
     <string name="starter">启动程序</string>
     <string name="start_with_root_failed">未授予 root 权限或是该设备没有 root，因此无法启动服务。</string>

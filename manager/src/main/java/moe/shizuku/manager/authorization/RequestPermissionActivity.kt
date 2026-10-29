@@ -110,8 +110,12 @@ class RequestPermissionActivity : AppActivity() {
                 setResult(uid, pid, requestCode, allowed = true, onetime = false)
                 dialog.dismiss()
             }
-            button3.setOnClickListener {
+            button2.setOnClickListener {
                 setResult(uid, pid, requestCode, allowed = false, onetime = true)
+                dialog.dismiss()
+            }
+            button3.setOnClickListener {
+                setResult(uid, pid, requestCode, allowed = false, onetime = false)
                 dialog.dismiss()
             }
             title.text = HtmlCompat.fromHtml(getString(R.string.permission_warning_template,

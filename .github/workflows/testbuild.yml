@@ -1,0 +1,45 @@
+name: Test Build
+
+# The original Build App workflow hardcodes `ref: master` and requires signing
+# secrets for release builds, so it cannot build a feature branch as-is.
+# This lightweight workflow builds whatever is pushed to `testbuild` as a
+# debug APK (debug signing is used automatically by signing.gradle).
+on:
+  push:
+    branches:
+      - testbuild
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Build debug APK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          ./gradlew :manager:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: shizuku-debug
+          path: manager/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
