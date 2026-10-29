@@ -24,9 +24,6 @@ jobs:
       attestations: write
       artifact-metadata: write
 
-    env:
-      KEYSTORE: ${{ secrets.KEYSTORE }}
-
     outputs:
       versionName: ${{ steps.buildWithGradle.outputs.versionName }}
       artifactName: ${{ steps.buildWithGradle.outputs.artifactName }}
@@ -35,7 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.prerelease && 'beta' || 'master' }}
+          ref: ${{ github.ref_name }}
           submodules: 'recursive'
           fetch-depth: 0
 
@@ -45,28 +42,39 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Validate Signing Config
+      # Signs every build with the keystore stored in the KEYSTORE secret so that
+      # builds can be installed over the previous one. When the secret is missing a
+      # throwaway keystore is generated: the build still succeeds, but the resulting
+      # APK cannot update installs made with a different key.
+      - name: Restore or create signing keystore
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE }}
         run: |
-          if [ "${{ inputs.debug }}" = "false" ] && [ "$KEYSTORE" = "" ]; then
-            echo "::error::Signing secrets not configured. Signing secrets are required for release builds."
-            exit 1
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > keystore.jks
+            echo "Restored keystore from the KEYSTORE secret"
+          else
+            keytool -genkeypair -v \
+              -keystore keystore.jks \
+              -storepass android -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "::warning::KEYSTORE secret is not set. Generated a throwaway keystore, this build will not update previous installs."
           fi
 
-      - name: Create signing.properties
-        if: ${{ !inputs.debug && env.KEYSTORE != '' }}
-        run: |
-          echo KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} > signing.properties
-          echo KEYSTORE_ALIAS=${{ secrets.KEYSTORE_ALIAS }} >> signing.properties
-          echo KEYSTORE_ALIAS_PASSWORD='${{ secrets.KEYSTORE_ALIAS_PASSWORD }}' >> signing.properties
-          echo KEYSTORE_FILE=../key.jks >> signing.properties
-          echo ${{ secrets.KEYSTORE }} | base64 --decode > key.jks
+          # signing.gradle resolves KEYSTORE_FILE against the :manager project
+          # directory, so ../keystore.jks points at the repository root.
+          {
+            echo "KEYSTORE_FILE=../keystore.jks"
+            echo "KEYSTORE_PASSWORD=android"
+            echo "KEYSTORE_ALIAS=androiddebugkey"
+            echo "KEYSTORE_ALIAS_PASSWORD=android"
+          } > signing.properties
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
-        with:
-          build-scan-publish: true
-          build-scan-terms-of-use-url: "https://gradle.com/terms-of-service"
-          build-scan-terms-of-use-agree: "yes"
 
       - name: Build with Gradle
         id: buildWithGradle
@@ -110,6 +118,16 @@ jobs:
           name: ${{ steps.buildWithGradle.outputs.artifactName }}
           path: ${{ steps.buildWithGradle.outputs.filePath }}
 
+      # R8 renames classes, so this mapping file is required to symbolicate
+      # crash reports from the release build.
+      - name: Upload mapping
+        if: ${{ always() && !inputs.debug }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: mapping
+          path: manager/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: ignore
+
       - name: Attest Build Provenance
         if: ${{ success() && !inputs.debug }}
         uses: actions/attest-build-provenance@v3
@@ -134,8 +152,12 @@ jobs:
           VERSION="${{ needs.build.outputs.versionName }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$VERSION" -m "Release version $VERSION"
-          git push origin "$VERSION"
+          if git rev-parse "$VERSION" > /dev/null 2>&1; then
+            echo "Tag $VERSION already exists, skipping"
+          else
+            git tag "$VERSION" -m "Release version $VERSION"
+            git push origin "$VERSION"
+          fi
 
       - name: Download Artifact
         uses: actions/download-artifact@v7
@@ -150,4 +172,9 @@ jobs:
         run: |
           FLAGS="--draft"
           [ "${{ inputs.prerelease }}" = "true" ] && FLAGS="$FLAGS --prerelease"
-          gh release create "$RELEASE_VERSION" files/*.apk $FLAGS
+          if gh release view "$RELEASE_VERSION" > /dev/null 2>&1; then
+            echo "Release $RELEASE_VERSION already exists, uploading assets"
+            gh release upload "$RELEASE_VERSION" files/*.apk --clobber
+          else
+            gh release create "$RELEASE_VERSION" files/*.apk $FLAGS
+          fi
