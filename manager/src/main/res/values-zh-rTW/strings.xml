@@ -204,7 +204,7 @@
     <string name="permission_description">允許應用程式使用 Shizuku。</string>
     <string name="permission_warning_template"><![CDATA[要允許「%1$s」%2$s 嗎？]]></string>
     <string name="grant_dialog_button_allow_always">一律允許</string>
-    <string name="grant_dialog_button_deny">"拒絕"</string>
+    <string name="grant_dialog_button_deny">"僅本次拒絕"</string>
     <string name="grant_dialog_button_deny_always">"拒絕且不再詢問"</string>
     <!-- Starter -->
     <string name="starter">啟動器</string>
