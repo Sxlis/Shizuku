@@ -3,7 +3,7 @@ name: Test Build
 # The original Build App workflow hardcodes `ref: master` and requires signing
 # secrets for release builds, so it cannot build a feature branch as-is.
 # This lightweight workflow builds whatever is pushed to `testbuild` as a
-# debug APK (debug signing is used automatically by signing.gradle).
+# release APK, signed with a keystore kept in the KEYSTORE secret.
 on:
   push:
     branches:
@@ -29,31 +29,41 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      # Restores the debug keystore from the KEYSTORE secret so that every build is
-      # signed with the same key and can be installed over the previous one.
-      # On the first run (secret not set yet) a keystore is generated and uploaded
-      # as the `debug-keystore-base64` artifact, to be saved as the KEYSTORE secret.
+      # Signs both debug and release builds with a stable key through the project's own
+      # signing.gradle (signing.properties). The AGP debug keystore location is not used
+      # because it follows XDG_CONFIG_HOME on newer runners (~/.config/.android) and would
+      # differ from what the workflow would otherwise create (~/.android).
+      # On the first run (secret not set yet) a keystore is generated and uploaded as the
+      # `debug-keystore-base64` artifact, to be saved as the KEYSTORE secret.
       - name: Restore or create signing keystore
         id: keystore
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE }}
         run: |
-          mkdir -p ~/.android
           if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "$KEYSTORE_B64" | base64 -d > keystore.jks
             echo "Restored keystore from the KEYSTORE secret"
             echo "generated=false" >> $GITHUB_OUTPUT
           else
             keytool -genkeypair -v \
-              -keystore ~/.android/debug.keystore \
+              -keystore keystore.jks \
               -storepass android -keypass android \
               -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-            base64 -w 0 ~/.android/debug.keystore > keystore.b64
+            base64 -w 0 keystore.jks > keystore.b64
             echo "generated=true" >> $GITHUB_OUTPUT
             echo "::notice::KEYSTORE secret is not set. Save the debug-keystore-base64 artifact as the KEYSTORE secret to get a stable signature."
           fi
+
+          # signing.gradle resolves KEYSTORE_FILE against the :manager project directory,
+          # so ../keystore.jks points at the repository root.
+          {
+            echo "KEYSTORE_FILE=../keystore.jks"
+            echo "KEYSTORE_PASSWORD=android"
+            echo "KEYSTORE_ALIAS=androiddebugkey"
+            echo "KEYSTORE_ALIAS_PASSWORD=android"
+          } > signing.properties
 
       - name: Upload generated keystore
         if: ${{ steps.keystore.outputs.generated == 'true' }}

@@ -11,4 +11,6 @@
 /manager/signing.properties
 /out
 /signing.properties
+*.jks
+/keystore.b64
 /.kotlin
