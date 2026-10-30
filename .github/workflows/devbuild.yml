@@ -1,13 +1,13 @@
-name: Test Build
+name: Dev Build
 
-# The original Build App workflow hardcodes `ref: master` and requires signing
-# secrets for release builds, so it cannot build a feature branch as-is.
-# This lightweight workflow builds whatever is pushed to `testbuild` as a
-# release APK, signed with a keystore kept in the KEYSTORE secret.
+# Lightweight build for the `dev` branch. Every push produces a release APK
+# signed with the keystore kept in the KEYSTORE secret, so consecutive builds
+# can be installed over each other.
+# Use the "Build App" workflow when you want a tagged draft release instead.
 on:
   push:
     branches:
-      - testbuild
+      - dev
   workflow_dispatch:
 
 jobs:
@@ -84,7 +84,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: shizuku-release
+          name: shizuku-dev
           path: manager/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
