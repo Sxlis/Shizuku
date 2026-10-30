@@ -83,7 +83,9 @@ class AdbPairDialogFragment : DialogFragment() {
                 return@setOnClickListener
             }
 
-            val password = binding.pairingCode.editText!!.text.toString()
+            // Some input methods insert a line break when Enter is pressed, which makes the
+            // pairing code invalid even though it looks correct on screen.
+            val password = binding.pairingCode.editText!!.text.toString().trim()
 
             viewModel.run(port, password)
         }

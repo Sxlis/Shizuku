@@ -1,0 +1,4 @@
+[   13880ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://github.com/_global-navigation/payloads.json?can_toggle_site_admin_and_employee_status=0&is_admin_mode_on=0&is_ui_opted_out=0&show_ui_opt_out=0&v=8:0
+[   14066ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://github.com/copilot/agent-sessions/thedjchi/Shizuku/agents:0
+[   14066ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://github.com/thedjchi/Shizuku/issues/197/agent_tasks:0
+[   14251ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://github.com/scribe/artifacts?resource_type=issue&resource_id=4331438058&page=1&per_page=30:0

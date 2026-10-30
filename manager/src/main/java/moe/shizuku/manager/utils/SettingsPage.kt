@@ -1,6 +1,5 @@
 package moe.shizuku.manager.utils
 
-import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -8,11 +7,10 @@ import android.os.Build
 import android.provider.Settings
 import android.service.quicksettings.TileService
 import android.util.Log
-import moe.shizuku.manager.adb.AdbPairingAccessibilityService
 import moe.shizuku.manager.service.WatchdogService
 
 sealed class SettingsPage(
-    private val action: String,
+    protected val action: String,
     private val fragmentArg: String? = null
 ) {
 
@@ -26,8 +24,8 @@ sealed class SettingsPage(
 
         object WirelessDebugging : Developer() {
             override fun buildIntent(context: Context): Intent {
-                if (Build.BRAND in setOf("xiaomi", "redmi", "poco")) {
-                    HighlightWirelessDebugging.buildIntent(context)
+                if (Build.BRAND.lowercase() in setOf("xiaomi", "redmi", "poco")) {
+                    return HighlightWirelessDebugging.buildIntent(context)
                 }
 
                 return Intent(TileService.ACTION_QS_TILE_PREFERENCES).apply {
@@ -54,7 +52,31 @@ sealed class SettingsPage(
                 }
             }
         }
-        
+
+        override fun buildIntent(context: Context): Intent {
+            return super.buildIntent(context).apply {
+                // Some ROMs resolve the implicit developer options intent to an unrelated settings
+                // screen (e.g. SIM management). Target the AOSP activity explicitly instead.
+                component = ComponentName(DEVELOPER_SETTINGS_PACKAGE, DEVELOPER_SETTINGS_ACTIVITY)
+            }
+        }
+
+        override fun launch(context: Context) {
+            runCatching {
+                context.startActivity(buildIntent(context))
+            }.recoverCatching {
+                // The activity class name differs on some ROMs, fall back to the implicit intent.
+                context.startActivity(super.buildIntent(context))
+            }.onFailure { e ->
+                Log.e("SettingsUtils", "Failed to start Settings activity", e)
+            }
+        }
+
+        private companion object {
+            const val DEVELOPER_SETTINGS_PACKAGE = "com.android.settings"
+            const val DEVELOPER_SETTINGS_ACTIVITY =
+                "com.android.settings.Settings\$DevelopmentSettingsDashboardActivity"
+        }
     }
 
     sealed class Notifications(
@@ -79,6 +101,19 @@ sealed class SettingsPage(
 
     object InternetPanel : SettingsPage(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
     object Accessibility : SettingsPage(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+
+    /**
+     * 开发者选项未启用时，开发者选项页面无法访问，此时引导用户去"设备信息"页，
+     * 在那里连续点击版本号即可启用开发者选项。
+     */
+    object DeviceInfo : SettingsPage(Settings.ACTION_DEVICE_INFO_SETTINGS) {
+        override fun buildIntent(context: Context): Intent {
+            return Intent(action).apply {
+                // 保留返回栈，用户启用开发者选项后可以返回
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        }
+    }
 
     protected val defaultFlags =
         Intent.FLAG_ACTIVITY_NEW_TASK or

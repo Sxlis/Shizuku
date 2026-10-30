@@ -45,6 +45,8 @@ object EnvironmentUtils {
         var port = SystemProperties.getInt("service.adb.tcp.port", -1)
         if (port == -1) port = SystemProperties.getInt("persist.adb.tcp.port", -1)
         if (port == -1 && isTelevision() && !isTlsSupported()) port = ShizukuSettings.getTcpPort()
-        return port
+        // Some devices expose a stale or out-of-range value in these properties right after boot,
+        // which makes every connection attempt fail until the user toggles adb manually.
+        return if (port in 1..65535) port else -1
     }
 }

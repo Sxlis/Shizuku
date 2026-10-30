@@ -74,11 +74,6 @@ object ShizukuReceiverStarter {
             context, 0, attemptNowIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val restoreIntent = Intent(context, NotifRestoreReceiver::class.java)
-        val restorePendingIntent = PendingIntent.getBroadcast(
-            context, 0, restoreIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
         val wifiIntent = SettingsPage.InternetPanel.buildIntent(context)
         val wifiPendingIntent = PendingIntent.getActivity(
             context, 0, wifiIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -91,11 +86,13 @@ object ShizukuReceiverStarter {
         return nb
             .setSmallIcon(R.drawable.ic_system_icon)
             .setContentTitle(context.getString(R.string.wadb_notification_title))
-            .setOngoing(true)
+            // Let the user swipe it away. Dismissing means "stop trying to start", which is why
+            // the delete intent is the same as the cancel action instead of restoring the notification.
+            .setOngoing(false)
             .setSilent(true)
             .addAction(R.drawable.ic_server_restart, context.getString(R.string.wadb_notification_attempt_now), attemptNowPendingIntent)
             .addAction(R.drawable.ic_close_24, context.getString(android.R.string.cancel), cancelPendingIntent)
-            .setDeleteIntent(restorePendingIntent)
+            .setDeleteIntent(cancelPendingIntent)
             .setContentIntent(wifiPendingIntent)
             .build()
     }
