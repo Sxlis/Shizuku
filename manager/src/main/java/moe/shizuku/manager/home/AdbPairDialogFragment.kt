@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build.VERSION_CODES
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputFilter
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.widget.Toast
@@ -58,8 +59,24 @@ class AdbPairDialogFragment : DialogFragment() {
     }
 
     private fun onDialogShow(dialog: AlertDialog) {
-        binding.pairingCode.editText!!.doAfterTextChanged {
-            binding.pairingCode.error = null
+        binding.pairingCode.editText!!.apply {
+            // android:inputType="number" is not honoured by every IME: some insert spaces or
+            // line breaks anyway. Filter at the source instead of trusting the keyboard.
+            filters = filters + InputFilter { source, start, end, _, _, _ ->
+                val digits = StringBuilder(end - start)
+                for (i in start until end) {
+                    val c = source[i]
+                    if (c in '0'..'9') digits.append(c)
+                }
+                when {
+                    digits.length == end - start -> null
+                    digits.isEmpty() -> ""
+                    else -> digits.toString()
+                }
+            }
+            doAfterTextChanged {
+                binding.pairingCode.error = null
+            }
         }
 
         binding.pairingCode.error = null
