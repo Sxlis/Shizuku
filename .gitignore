@@ -14,3 +14,4 @@
 *.jks
 /keystore.b64
 /.kotlin
+.playwright-cli/
