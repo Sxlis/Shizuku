@@ -224,6 +224,8 @@
     <string name="watchdog_turn_off">关</string>
     <string name="watchdog_shizuku_crashed_title">Shizuku 最近崩溃了</string>
     <string name="watchdog_shizuku_crashed_text">Watchdog 已重启服务。点击了解可防止未来崩溃的潜在修复方案。</string>
+    <string name="watchdog_shizuku_failed_title">Shizuku 无法自动重启</string>
+    <string name="watchdog_shizuku_failed_text">Watchdog 尝试恢复服务但未成功。点击了解可能的原因，或手动打开 Shizuku 重新启动。</string>
     <string name="watchdog_shizuku_crashed_action_turn_off_alerts">关闭提醒</string>
     <!-- Misc -->
     <string name="dialog_cannot_open_browser_title">无法启动浏览器</string>

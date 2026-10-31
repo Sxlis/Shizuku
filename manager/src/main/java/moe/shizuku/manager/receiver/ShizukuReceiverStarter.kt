@@ -37,22 +37,51 @@ object ShizukuReceiverStarter {
         STOPPED
     }
 
-    fun start(context: Context, forceStart: Boolean = false) {
-        if ((UserHandleCompat.myUserId() > 0 || ShizukuStateMachine.isRunning()) && !forceStart) return
+    /**
+     * What [start] actually did. A caller that waits for the service needs to know whether a
+     * start that can fail on its own was requested, or whether something else is in charge
+     * (a background worker that keeps retrying, a missing permission, ...).
+     */
+    enum class StartResult {
+        /** A root start was requested and the state machine moved to STARTING. */
+        ROOT_STARTED,
+
+        /** [AdbStartWorker] was enqueued and keeps retrying until the device is reachable. */
+        ADB_ENQUEUED,
+
+        /** Nothing was attempted: the service is already running or this is a secondary user. */
+        SKIPPED,
+
+        /** Background start is not supported with the current configuration. */
+        UNSUPPORTED,
+
+        /** WRITE_SECURE_SETTINGS is missing; an error notification was posted instead. */
+        NO_PERMISSION,
+    }
+
+    fun start(context: Context, forceStart: Boolean = false): StartResult {
+        if ((UserHandleCompat.myUserId() > 0 || ShizukuStateMachine.isRunning()) && !forceStart) {
+            return StartResult.SKIPPED
+        }
 
         if (ShizukuSettings.getLastLaunchMode() == LaunchMethod.ROOT) {
             rootStart(context)
-        } else if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.R || EnvironmentUtils.isTelevision() || EnvironmentUtils.getAdbTcpPort() > 0)
-            && ShizukuSettings.getLastLaunchMode() == LaunchMethod.ADB) {
-                if (context.checkSelfPermission(WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED) {
-                    AdbStartWorker.enqueue(context)
-                    updateNotification(context, WorkerState.AWAITING_WIFI)
-                } else {
-                    showPermissionErrorNotification(context)
-                }
-        } else {
-            Log.w(AppConstants.TAG, "Background start not supported")
+            return StartResult.ROOT_STARTED
         }
+
+        if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.R || EnvironmentUtils.isTelevision() || EnvironmentUtils.getAdbTcpPort() > 0)
+            && ShizukuSettings.getLastLaunchMode() == LaunchMethod.ADB) {
+            if (context.checkSelfPermission(WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED) {
+                AdbStartWorker.enqueue(context)
+                updateNotification(context, WorkerState.AWAITING_WIFI)
+                return StartResult.ADB_ENQUEUED
+            }
+            showPermissionErrorNotification(context)
+            return StartResult.NO_PERMISSION
+        }
+
+        Log.w(AppConstants.TAG, "Background start not supported")
+        return StartResult.UNSUPPORTED
     }
 
     fun buildNotification(context: Context, msg: String? = null): Notification {

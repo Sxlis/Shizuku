@@ -33,76 +33,121 @@ import kotlinx.coroutines.launch
 class WatchdogService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    @Volatile
     private var crashCheckJob: Job? = null
 
     /**
-     * True while a silent recovery attempt is running. A second CRASHED transition means that
-     * attempt failed, which is the only case worth telling the user about. A disconnect that
-     * heals itself (restarting adbd, for example) must stay invisible.
+     * True from the moment a crash is seen until the recovery attempt ends, so that only one
+     * attempt runs at a time.
      */
+    @Volatile
     private var recoveryInProgress = false
+
+    /**
+     * True once the grace period expired and a restart was actually requested. A server that
+     * comes back before that is a blip (toggling wireless debugging restarts adbd) and must
+     * stay invisible, so only an attempt that got this far is reported.
+     */
+    @Volatile
+    private var restartRequested = false
 
     private val stateListener: (ShizukuStateMachine.State) -> Unit = { state ->
         when (state) {
             ShizukuStateMachine.State.CRASHED -> handleCrashed()
 
-            ShizukuStateMachine.State.RUNNING,
-            ShizukuStateMachine.State.STOPPED -> {
-                // Back online, or stopped on purpose: nothing to report either way.
+            ShizukuStateMachine.State.RUNNING -> {
+                // Reported here instead of from the coroutine: ShizukuStateMachine's own
+                // binder received listener reaches this branch first and cancels the
+                // coroutine, so code after set(RUNNING) in there may never run.
+                val recovered = recoveryInProgress && restartRequested
                 recoveryInProgress = false
+                restartRequested = false
+                crashCheckJob?.cancel()
+                if (recovered) showRecoveredNotification()
+            }
+
+            ShizukuStateMachine.State.STOPPED -> {
+                // Stopped on purpose: never reported.
+                recoveryInProgress = false
+                restartRequested = false
                 crashCheckJob?.cancel()
             }
 
+            // STARTING / STOPPING: a start or a stop is still in flight.
             else -> Unit
         }
     }
 
     private fun handleCrashed() {
-        if (recoveryInProgress) {
-            // The silent attempt already ran and the server went down again, so it did not work.
-            recoveryInProgress = false
-            showCrashNotification()
-            return
-        }
+        if (recoveryInProgress) return
 
         recoveryInProgress = true
+        restartRequested = false
         crashCheckJob?.cancel()
         crashCheckJob = scope.launch {
-            // Toggling wireless debugging restarts adbd, which kills the server and brings it
-            // back within a second, so give it a moment before spending a real recovery attempt.
-            delay(RECOVERY_GRACE_MS)
+            try {
+                // Toggling wireless debugging restarts adbd, which kills the server and brings
+                // it back within a second, so give it a moment before spending a real attempt.
+                delay(RECOVERY_GRACE_MS)
 
-            if (Shizuku.pingBinder()) {
-                ShizukuStateMachine.set(ShizukuStateMachine.State.RUNNING)
-                recoveryInProgress = false
-                return@launch
-            }
+                if (Shizuku.pingBinder()) {
+                    // Back on its own: no restart was requested, so the state listener stays
+                    // silent.
+                    ShizukuStateMachine.set(ShizukuStateMachine.State.RUNNING)
+                    return@launch
+                }
 
-            ShizukuReceiverStarter.start(applicationContext)
+                restartRequested = true
+                val startResult = ShizukuReceiverStarter.start(applicationContext)
 
-            // Watch the recovery for a bounded window. Only a timeout means the automatic
-            // restart failed and the user has to step in, so that is the only thing reported.
-            val deadline = System.currentTimeMillis() + RECOVERY_TIMEOUT_MS
-            while (System.currentTimeMillis() < deadline) {
-                delay(RECOVERY_POLL_MS)
+                // Watch the recovery for a bounded window. The notification for a successful
+                // restart is posted by the state listener, not from here.
+                val deadline = System.currentTimeMillis() + RECOVERY_TIMEOUT_MS
+                while (System.currentTimeMillis() < deadline) {
+                    delay(RECOVERY_POLL_MS)
+
+                    if (Shizuku.pingBinder()) {
+                        ShizukuStateMachine.set(ShizukuStateMachine.State.RUNNING)
+                        return@launch
+                    }
+
+                    if (ShizukuStateMachine.get() == ShizukuStateMachine.State.STOPPED) {
+                        // The user stopped it on purpose while we were waiting.
+                        return@launch
+                    }
+                }
 
                 if (Shizuku.pingBinder()) {
                     ShizukuStateMachine.set(ShizukuStateMachine.State.RUNNING)
-                    recoveryInProgress = false
-                    return@launch
+                } else if (ShizukuStateMachine.get() != ShizukuStateMachine.State.STOPPED &&
+                    shouldReportFailure(startResult)
+                ) {
+                    showFailureNotification()
                 }
-
-                if (ShizukuStateMachine.get() == ShizukuStateMachine.State.STOPPED) {
-                    // The user stopped it on purpose while we were waiting.
-                    recoveryInProgress = false
-                    return@launch
-                }
+            } finally {
+                recoveryInProgress = false
+                restartRequested = false
             }
-
-            recoveryInProgress = false
-            showCrashNotification()
         }
     }
+
+    /**
+     * A restart in ADB mode is carried out by [ShizukuReceiverStarter]'s background worker, which
+     * keeps retrying (Wi-Fi off, device locked, ...) and reports through its own notification, so
+     * the watchdog running out of patience is not a failure the user has to act on. Nothing is
+     * reported either when a more specific notification was already posted, or when no start was
+     * attempted at all.
+     */
+    private fun shouldReportFailure(result: ShizukuReceiverStarter.StartResult): Boolean =
+        when (result) {
+            ShizukuReceiverStarter.StartResult.ROOT_STARTED,
+            ShizukuReceiverStarter.StartResult.UNSUPPORTED -> true
+
+            ShizukuReceiverStarter.StartResult.ADB_ENQUEUED,
+            ShizukuReceiverStarter.StartResult.NO_PERMISSION,
+            ShizukuReceiverStarter.StartResult.SKIPPED -> false
+        }
 
     override fun onCreate() {
         super.onCreate()
@@ -184,14 +229,27 @@ class WatchdogService : Service() {
             .build()
     }
 
-    private fun showCrashNotification() {
-        val channelId = CRASH_CHANNEL_ID
-        val channelName = "Crash Reports"
+    /** The service crashed and the watchdog brought it back. */
+    private fun showRecoveredNotification() {
+        showWatchdogNotification(
+            R.string.watchdog_shizuku_crashed_title,
+            R.string.watchdog_shizuku_crashed_text,
+        )
+    }
 
+    /** The service stopped and the automatic restart did not work. */
+    private fun showFailureNotification() {
+        showWatchdogNotification(
+            R.string.watchdog_shizuku_failed_title,
+            R.string.watchdog_shizuku_failed_text,
+        )
+    }
+
+    private fun showWatchdogNotification(titleRes: Int, textRes: Int) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
-            channelId,
-            channelName,
+            CRASH_CHANNEL_ID,
+            "Crash Reports",
             NotificationManager.IMPORTANCE_DEFAULT
         )
         nm.createNotificationChannel(channel)
@@ -199,14 +257,18 @@ class WatchdogService : Service() {
         val learnMoreIntent = Intent(Intent.ACTION_VIEW).apply {
             setData(Uri.parse("https://github.com/thedjchi/Shizuku/wiki#shizuku-keeps-stopping-randomly"))
         }
-        val learnMorePendingIntent = PendingIntent.getActivity(this, 0, learnMoreIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val learnMorePendingIntent = PendingIntent.getActivity(
+            this, 0, learnMoreIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
         val disableIntent = SettingsPage.Notifications.NotificationChannel.buildIntent(applicationContext)
-        val disablePendingIntent = PendingIntent.getActivity(this, 0, disableIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val disablePendingIntent = PendingIntent.getActivity(
+            this, 0, disableIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle(getString(R.string.watchdog_shizuku_crashed_title))
-            .setContentText(getString(R.string.watchdog_shizuku_crashed_text))
+        val notification = NotificationCompat.Builder(this, CRASH_CHANNEL_ID)
+            .setContentTitle(getString(titleRes))
+            .setContentText(getString(textRes))
             .setSmallIcon(R.drawable.ic_system_icon)
             .setContentIntent(learnMorePendingIntent)
             .setAutoCancel(true)

@@ -292,6 +292,8 @@
     <string name="watchdog_turn_off">Turn Off</string>
     <string name="watchdog_shizuku_crashed_title">Shizuku crashed recently</string>
     <string name="watchdog_shizuku_crashed_text">Watchdog restarted the service. Tap to learn about potential fixes to prevent future crashes.</string>
+    <string name="watchdog_shizuku_failed_title">Shizuku failed to restart</string>
+    <string name="watchdog_shizuku_failed_text">Watchdog could not bring the service back. Tap to learn about possible fixes, or open Shizuku to start it manually.</string>
     <string name="watchdog_shizuku_crashed_action_turn_off_alerts">Turn Off Alerts</string>
 
     <!-- Misc -->
