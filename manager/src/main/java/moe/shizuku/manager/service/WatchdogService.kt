@@ -20,14 +20,87 @@ import moe.shizuku.manager.ShizukuSettings
 import moe.shizuku.manager.receiver.ShizukuReceiverStarter
 import moe.shizuku.manager.utils.SettingsPage
 import moe.shizuku.manager.utils.ShizukuStateMachine
+import rikka.shizuku.Shizuku
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class WatchdogService : Service() {
 
-    private val stateListener: (ShizukuStateMachine.State) -> Unit = {
-        if (it == ShizukuStateMachine.State.CRASHED) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var crashCheckJob: Job? = null
+
+    /**
+     * True while a silent recovery attempt is running. A second CRASHED transition means that
+     * attempt failed, which is the only case worth telling the user about. A disconnect that
+     * heals itself (restarting adbd, for example) must stay invisible.
+     */
+    private var recoveryInProgress = false
+
+    private val stateListener: (ShizukuStateMachine.State) -> Unit = { state ->
+        when (state) {
+            ShizukuStateMachine.State.CRASHED -> handleCrashed()
+
+            ShizukuStateMachine.State.RUNNING,
+            ShizukuStateMachine.State.STOPPED -> {
+                // Back online, or stopped on purpose: nothing to report either way.
+                recoveryInProgress = false
+                crashCheckJob?.cancel()
+            }
+
+            else -> Unit
+        }
+    }
+
+    private fun handleCrashed() {
+        if (recoveryInProgress) {
+            // The silent attempt already ran and the server went down again, so it did not work.
+            recoveryInProgress = false
             showCrashNotification()
+            return
+        }
+
+        recoveryInProgress = true
+        crashCheckJob?.cancel()
+        crashCheckJob = scope.launch {
+            // Toggling wireless debugging restarts adbd, which kills the server and brings it
+            // back within a second, so give it a moment before spending a real recovery attempt.
+            delay(RECOVERY_GRACE_MS)
+
+            if (Shizuku.pingBinder()) {
+                ShizukuStateMachine.set(ShizukuStateMachine.State.RUNNING)
+                recoveryInProgress = false
+                return@launch
+            }
+
             ShizukuReceiverStarter.start(applicationContext)
+
+            // Watch the recovery for a bounded window. Only a timeout means the automatic
+            // restart failed and the user has to step in, so that is the only thing reported.
+            val deadline = System.currentTimeMillis() + RECOVERY_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                delay(RECOVERY_POLL_MS)
+
+                if (Shizuku.pingBinder()) {
+                    ShizukuStateMachine.set(ShizukuStateMachine.State.RUNNING)
+                    recoveryInProgress = false
+                    return@launch
+                }
+
+                if (ShizukuStateMachine.get() == ShizukuStateMachine.State.STOPPED) {
+                    // The user stopped it on purpose while we were waiting.
+                    recoveryInProgress = false
+                    return@launch
+                }
+            }
+
+            recoveryInProgress = false
+            showCrashNotification()
         }
     }
 
@@ -58,6 +131,8 @@ class WatchdogService : Service() {
     }
 
     override fun onDestroy() {
+        crashCheckJob?.cancel()
+        scope.cancel()
         ShizukuStateMachine.removeListener(stateListener)
         isRunning.set(false)
         ShizukuSettings.setWatchdog(applicationContext, false)
@@ -145,6 +220,14 @@ class WatchdogService : Service() {
         private const val TAG = "ShizukuWatchdog"
         private const val NOTIFICATION_ID_WATCHDOG = 1001
         private const val NOTIFICATION_ID_CRASH = 1002
+
+        /** Time allowed for the server to come back by itself before a recovery is started. */
+        private const val RECOVERY_GRACE_MS = 2000L
+
+        /** How long the automatic restart gets before the failure is reported. */
+        private const val RECOVERY_TIMEOUT_MS = 15_000L
+
+        private const val RECOVERY_POLL_MS = 1000L
         const val CRASH_CHANNEL_ID = "crash_reports"
 
         private val isRunning = AtomicBoolean(false)
